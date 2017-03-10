@@ -185,8 +185,6 @@ classdef CentroidalVoronoiTesselation < handle
             %profile off;
             %profile viewer;
             
-            %DT = delaunayTriangulation(obj.sites);
-            %[VoronoiDiagram, VoronoiFaces] = voronoiDiagram(DT);
             [obj.voronoiVertices, obj.voronoiEdges] = obj.findVoronoiVertices();
             
             close(w);
