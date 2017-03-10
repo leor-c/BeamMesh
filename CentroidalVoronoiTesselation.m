@@ -54,41 +54,34 @@ classdef CentroidalVoronoiTesselation < handle
             %   efficient version:
             %   calculate in a matrix p-x_i for all p and all x_i such that
             %   each row is (x,y,z) triplets of p-x_i for all i. and
-            %   different rows are different p. then, stack them all to one
-            %   vector.
+            %   different rows are different p. 
             V_size = obj.mesh.dimensions(1);
             
             p = obj.mesh.vertices';
             p = repmat(p, obj.numberOfSites, 1);
-            p = p(:);
             allsites = obj.sites';
             allsites = allsites(:);
-            allsites = repmat(allsites, V_size, 1);
+            allsites = repmat(allsites, 1, V_size);
             distanceVec = p-allsites;
             
             %   make a matrix whose diagonal is composed out of the metric
-            %   tensors M_i, and repeat it |V| times so it will match the
-            %   vector p-x_i we made.
+            %   tensors M_i:
             M = blkdiag(obj.metricTensors{:});
-            %M_cell = repmat({M}, V_size, 1);
-            %M_all = blkdiag(M_cell{:});
-            M_all = kron(speye(V_size),M);
             
-            res = M_all * distanceVec;
-            res_size = length(res);
+            %   calculate M*(p-xi). this is half the way. then stack all
+            %   columns:
+            res = M * distanceVec;
+            res = res(:);
             
-            % put mid-result to a diagonal matrix:
-            diagRes = sparse(1:res_size, 1:res_size, res);
             % now let's transofrm it to a matrix of size (3k|V| X k|V|) so each vector
-            % has 3 ones for the current triplet. so after multiplication
+            % has 3 entries for the current triplet. so after multiplication
             % we'll have k distances for each point p. then we'll get the
             % minimum.
-            kronMat = kron(speye(obj.numberOfSites * V_size), sparse([1;1;1]));
-            
-            res = diagRes*kronMat;
+            triMat = repmat(1:(obj.numberOfSites * V_size),3,1);
+            res = sparse(1:(3 * obj.numberOfSites * V_size), triMat(:), res);
             
             %finish computation:
-            res = distanceVec' * res;
+            res = distanceVec(:)' * res;
             res = reshape(res,obj.numberOfSites, V_size);
             [~,new_cells] = min(res);
             new_cells = new_cells';
@@ -123,13 +116,18 @@ classdef CentroidalVoronoiTesselation < handle
             new_metrics = zeros(3, 3, obj.numberOfSites);
             
             %   compute C_i:
-            for i=1:length(obj.cells)
-                %   calculate C_i, using the sum of all points in its cell.
-                %   then, calculate eigen decomposition, and M_i.
-                cell_idx = obj.cells(i);
-                p = obj.mesh.vertices(i,:);
-                site = obj.sites(cell_idx,:);
-                new_metrics(:,:,cell_idx) = new_metrics(:,:,cell_idx) + ( (p - site)' * (p - site) );
+            %   summationMatrix (|V| x k) contain in the i-th column 1
+            %   in indices of points that belong to cell i.
+            V_size = obj.mesh.dimensions(1);
+            summationMatrix = sparse(1:V_size, obj.cells, ones(V_size,1));
+            %   calc matrix whith |V| columns, where each col. i is the
+            %   site coordinates of the site that p_i is in.
+            p_sites = obj.sites' * summationMatrix';
+            distanceMat = obj.mesh.vertices' - p_sites;
+            
+            for k=1:obj.numberOfSites
+                cellPointsDiff = distanceMat(:, find(summationMatrix(:,k)));
+                new_metrics(:,:,k) = cellPointsDiff * cellPointsDiff';
             end
             
             for k=1:obj.numberOfSites
@@ -156,14 +154,14 @@ classdef CentroidalVoronoiTesselation < handle
             
             waitbar(0,w,'current iteration');
             
+            %profile on;
+            
             i=1;
             while i < numOfIterations
                 waitbar(i/numOfIterations);
-                %profile on;
+                
                 iteration_dist = obj.calculateCellsAndSites();
                 obj.calculateMetrics();
-                %profile off;
-                %profile viewer;
                 
                 disp(['iteration ' num2str(i) ...
                 ' distance from centroid = ' num2str(iteration_dist)]);
@@ -183,6 +181,9 @@ classdef CentroidalVoronoiTesselation < handle
                     end
                 end
             end
+            
+            %profile off;
+            %profile viewer;
             
             %DT = delaunayTriangulation(obj.sites);
             %[VoronoiDiagram, VoronoiFaces] = voronoiDiagram(DT);
@@ -223,7 +224,38 @@ classdef CentroidalVoronoiTesselation < handle
         
         function faces = findVoronoiFaces(obj) 
             % the method is to find the closest point to the site in its
-            % cell, then using the normal and
+            % cell, then using the normal and the cell's site, use them as
+            % reference point and define order clockwise of the vertices.
+            
+            
+        end
+        
+        function N = getFacesNormals(obj)
+            %   For each voronoi cell calculate it's normal.
+            %   for now, I'll do it by calculating the mean of all normals
+            %   in the cell.
+            N_V = obj.mesh.getVertexNormals()';
+            V_size = obj.mesh.dimensions(1);
+            summationMatrix = sparse(1:V_size, obj.cells, ones(V_size,1));
+            
+            N = N_V * summationMatrix;
+            cellSize = sum(summationMatrix);
+            N = N ./ repmat(cellSize,3,1);
+        end
+        
+        function showResults(obj)
+            obj.mesh.showMesh(obj.cells);
+            alpha(0.85);
+            hold on;
+            [V_v,V_e] = obj.findVoronoiVertices();
+            scatter3(obj.sites(:,1),obj.sites(:,2),obj.sites(:,3),100,'filled','yellow');
+            scatter3(V_e(:,1),V_e(:,2),V_e(:,3),25,'filled','cyan');
+            scatter3(V_v(:,1),V_v(:,2),V_v(:,3),50,'filled','red');
+            
+            % show normals:
+            N = obj.getFacesNormals();
+            quiver3(obj.sites(:,1), obj.sites(:,2), obj.sites(:,3) ...
+                ,N(1,:)', N(2,:)', N(3,:)','-k');
         end
         
     end
