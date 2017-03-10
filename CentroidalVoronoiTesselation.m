@@ -49,9 +49,6 @@ classdef CentroidalVoronoiTesselation < handle
             %   during that proccess, calculate the mean value of each new
             %   cell, and at the end update the sites to that mean.
             
-            %new_cells = zeros(obj.mesh.dimensions(1), 1);
-            %new_cells_occupance = zeros(obj.numberOfSites, 1);
-            %new_sites = zeros(obj.numberOfSites, 3);
             iteration_dist = 0;
             
             %   efficient version:
@@ -113,46 +110,7 @@ classdef CentroidalVoronoiTesselation < handle
             end
             
             new_sites = cellSum';
-            %for i=1:obj.mesh.dimensions(1)
-                %   iterate over all vertices, and insert it to the
-                %   apropriate cell:
-                %{
-                p = obj.mesh.vertices(i,:);
-                
-                
-                %   use default value for the index of the cell:
-                min_cell_idx = 1;
-                dist = inf;
-                for k=1:obj.numberOfSites
-                    %   find the cell of the current vertex:
-                    cur_site = obj.sites(k,:);
-                    current_dist = (p - cur_site) * obj.metrics(:,:,k) * (p - cur_site)';
-                    if current_dist < dist
-                        dist = current_dist;
-                        min_cell_idx = k;
-                    end
-                end
-                
-                %   assign the current vertex to it's cell:
-                new_cells(i) = min_cell_idx;
-                new_cells_occupance(min_cell_idx) = new_cells_occupance(min_cell_idx) + 1;
-                
-                %   update cell cendroid:
-                new_sites(min_cell_idx,:) = new_sites(min_cell_idx,:) + p;
-                %}
-            %end
             
-            %   divide each new site by the size of it (to get mean):
-            %   also, compute distance from current sites:
-            %{
-            iteration_dist = 0;
-            for k=1:obj.numberOfSites
-                if new_cells_occupance(k) > 0
-                    new_sites(k,:) = new_sites(k,:) ./ new_cells_occupance(k);
-                    iteration_dist = iteration_dist + norm(obj.sites(k,:) - new_sites(k,:));
-                end
-            end
-            %}
             %   assign the new cells and sites to the object:
             obj.cells = new_cells;
             obj.sites = new_sites;
