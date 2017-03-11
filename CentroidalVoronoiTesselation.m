@@ -20,6 +20,10 @@ classdef CentroidalVoronoiTesselation < handle
         
         voronoiAdjMatrix
         
+        %   3d coordinates in cetroid of faces that are on edge of voronoi
+        %   diagram.
+        voronoiEdgeTriangles
+        
         %   a matrix of size |V| x K where each column j represents which
         %   points p are assocciated with site j.
         summationMatrix
@@ -59,10 +63,9 @@ classdef CentroidalVoronoiTesselation < handle
             
             obj.runIterations();
             
-            %profile on;
             obj.getVoronoiCells();
-            %profile off;
-            %profile viewer;
+            obj.findVoronoiVertices();
+            obj.findVoronoiFaces();
         end
         
         function iteration_dist = calculateCellsAndSites(obj)
@@ -248,6 +251,7 @@ classdef CentroidalVoronoiTesselation < handle
             obj.voronoiVertexNeighborCells = V_neighbors(1:N_voronoi,:);
             obj.voronoiVertexNormals = obj.voronoiVertexNormals(1:N_voronoi,:);
             V2 = V2(1:n_v2,:);
+            obj.voronoiEdgeTriangles = V2;
         end
         
         function faces = findVoronoiFaces(obj) 
@@ -369,8 +373,6 @@ classdef CentroidalVoronoiTesselation < handle
                             end
                         end
                     end
-                    
-                    %Q(1:occupation,:) = sortrows(Q(1:occupation,:));
                 end
                 
             end
@@ -383,7 +385,9 @@ classdef CentroidalVoronoiTesselation < handle
             alpha(0.85);
             hold on;
             
-            [V_v,V_e] = obj.findVoronoiVertices();
+            %[V_v,V_e] = obj.findVoronoiVertices();
+            V_v = obj.voronoiVertices;
+            V_e = obj.voronoiEdgeTriangles;
             scatter3(obj.sites(:,1),obj.sites(:,2),obj.sites(:,3),100,'filled','yellow');
             scatter3(V_e(:,1),V_e(:,2),V_e(:,3),25,'filled','cyan');
             scatter3(V_v(:,1),V_v(:,2),V_v(:,3),50,'filled','red');
