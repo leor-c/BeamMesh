@@ -10,7 +10,15 @@ classdef CentroidalVoronoiTesselation < handle
         metrics
         metricTensors
         voronoiVertices
-        voronoiEdges
+        voronoiVertexNormals
+        %   matrix where each row i is the 3 neighbor cells of vertex i.
+        voronoiVertexNeighborCells
+        
+        %   a martix with row for each cell, and each row has 1 in indices
+        %   of vertices that assocciated with the cell:
+        voronoiCellVertices
+        
+        voronoiAdjMatrix
         
         %   a matrix of size |V| x K where each column j represents which
         %   points p are assocciated with site j.
@@ -51,7 +59,10 @@ classdef CentroidalVoronoiTesselation < handle
             
             obj.runIterations();
             
+            %profile on;
             obj.getVoronoiCells();
+            %profile off;
+            %profile viewer;
         end
         
         function iteration_dist = calculateCellsAndSites(obj)
@@ -202,9 +213,14 @@ classdef CentroidalVoronoiTesselation < handle
         function [V,V2] = findVoronoiVertices(obj)
             N_F = obj.mesh.dimensions(2);
             V = zeros(N_F,3);
+            V_neighbors = zeros(N_F,3);
             V2 = zeros(N_F,3);
             N_voronoi = 0;
             n_v2 = 0;
+            
+            facesNormals = obj.mesh.getFacesNormals();
+            obj.voronoiVertexNormals = zeros(N_F,3);
+            
             for i=1:N_F
                 %   iterate over all faces, and find those who have
                 %   vertices from 3 different cells => vertices of the
@@ -216,8 +232,10 @@ classdef CentroidalVoronoiTesselation < handle
                     %   this is a vertex of the voronoy diagram:
                     N_voronoi = N_voronoi + 1;
                     V(N_voronoi,:) = obj.mesh.getFaceBarycentricPoint(i,[1/3,1/3,1/3]);
+                    V_neighbors(N_voronoi,:) = neighbors_cells;
+                    obj.voronoiVertexNormals(N_voronoi,:) = facesNormals(i,:);
                 end
-                if (length(neighbors_cells) >= 2)
+                if (length(neighbors_cells) == 2)
                     %   voronoi edge
                     n_v2 = n_v2 + 1;
                     V2(n_v2,:) = obj.mesh.getFaceBarycentricPoint(i,[1/3,1/3,1/3]);
@@ -226,6 +244,9 @@ classdef CentroidalVoronoiTesselation < handle
             
             % remove redundant last lines that are 0s:
             V = V(1:N_voronoi,:);
+            obj.voronoiVertices = V;
+            obj.voronoiVertexNeighborCells = V_neighbors(1:N_voronoi,:);
+            obj.voronoiVertexNormals = obj.voronoiVertexNormals(1:N_voronoi,:);
             V2 = V2(1:n_v2,:);
         end
         
@@ -233,7 +254,38 @@ classdef CentroidalVoronoiTesselation < handle
             % the method is to find the closest point to the site in its
             % cell, then using the normal and the cell's site, use them as
             % reference point and define order clockwise of the vertices.
+            %   first, let's generate for each cell a list of it's
+            %   vertices:
+            [numOfV,~] = size(obj.voronoiVertices);
+            trimat = repmat(1:numOfV,3,1);
             
+            %   matrix where each row i is 1 in indices of vetrices
+            %   assocciated with cell i, and 0 otherwise.
+            obj.voronoiCellVertices = sparse(obj.voronoiVertexNeighborCells', ...
+                trimat, ones(3*numOfV,1));
+            
+            obj.voronoiAdjMatrix = sparse(numOfV,numOfV);
+            for k=1:obj.numberOfSites
+                %   iterate over couples of vertices of site k, and for 2
+                %   vertices who share 2 common cells, put an edge between
+                %   them. (each cell is at most 10 vertices from what I
+                %   experienced so shouldnt be a problem).
+                vertices = find(obj.voronoiCellVertices(k,:));
+                n = length(vertices);
+                
+                for i=1:(n-1)
+                    for j=i+1:n
+                        common = unique([obj.voronoiVertexNeighborCells(vertices(i),:), ...
+                            obj.voronoiVertexNeighborCells(vertices(j),:)]);
+                        if (length(common) == 4)
+                            %   set an edge in adj Matrix:
+                            obj.voronoiAdjMatrix(vertices(i), vertices(j)) = 1;
+                            obj.voronoiAdjMatrix(vertices(j), vertices(i)) = 1;
+                        end
+                    end
+                end
+                
+            end
             
         end
         
@@ -275,15 +327,23 @@ classdef CentroidalVoronoiTesselation < handle
             %   3-col matrix. 1st col is distance from site, 2nd col is
             %   index of point p, and 3-rd is the site from which p is
             %   measured.
-            Q = [d r (1:obj.numberOfSites)'];
-            Q = sortrows(Q);
+            Q = zeros((2*obj.mesh.dimensions(3)),3);
+            Q(1:obj.numberOfSites,:) = [d r (1:obj.numberOfSites)'];
+            Q(1:obj.numberOfSites,:) = sortrows(Q(1:obj.numberOfSites,:));
+            occupation = obj.numberOfSites;
+            start = 1;
             
             cells = zeros(obj.mesh.dimensions(1),1);
             
             while (~isempty(Q))
                 %   pop from queue:
-                current = Q(1,:);
-                Q(1,:) = []; % remove row
+                current = Q(start,:);
+                start = start + 1;
+                %occupation = occupation - 1;
+                
+                if(start >= occupation)
+                    break;
+                end
                 
                 %   assign to cell (if hasn't been assigned yet):
                 if (cells(current(2)) == 0)
@@ -296,9 +356,21 @@ classdef CentroidalVoronoiTesselation < handle
                         if (cells(neighbor) == 0)
                             dist = obj.distancesMatrix(current(3), neighbor); 
                             row = [dist neighbor current(3)];
-                            Q = [Q; row];
+                            
+                            place = find(Q(start:occupation,1) > dist, 1);
+                            place = place + start -1;
+                            occupation = occupation + 1;
+                            Q(occupation,:) = row;
+                            
+                            if (~isempty(place))
+                                Q(start:occupation,:) = [Q(start:(place-1),:);...
+                                                        Q(occupation,:); ...
+                                                        Q(place:(occupation-1),:)];
+                            end
                         end
                     end
+                    
+                    %Q(1:occupation,:) = sortrows(Q(1:occupation,:));
                 end
                 
             end
@@ -320,6 +392,23 @@ classdef CentroidalVoronoiTesselation < handle
             %N = obj.getFacesNormals();
             %quiver3(obj.sites(:,1), obj.sites(:,2), obj.sites(:,3) ...
             %    ,N(1,:)', N(2,:)', N(3,:)','-k');
+        end
+        
+        function showPolygon(obj)
+            %   show polygonal approximation using adj matrix:
+            obj.mesh.showMesh(obj.cells);
+            alpha(0.5);
+            hold on;
+            %figure;
+            [numOfV,~] = size(obj.voronoiVertices);
+            for i=1:numOfV
+                vertices = find(obj.voronoiAdjMatrix(i,:));
+                for j=vertices
+                    edge = [obj.voronoiVertices(i,:)' obj.voronoiVertices(j,:)'];
+                    plot3(edge(1,:),edge(2,:),edge(3,:),'-k','LineWidth',3);
+                    hold on;
+                end
+            end
         end
         
     end

@@ -1,9 +1,9 @@
 %% For Bunny:
 %   set the number of sites for the Voronoi diagram:
-k = 40;
+k = 100;
 %   load the origial mesh from off file:
 bunny = Mesh('../meshes/bunny2_smooth.off');
-bunny.showMesh();
+%bunny.showMesh();
 bunny_bm = BeamMesh(bunny,k);
 
 %   Calculate CVT w/ respect to mean curvature:
@@ -26,7 +26,7 @@ car_cvt.showResults();
 
 %% For Companion Cube:
 %   set the number of sites for the Voronoi diagram:
-k = 6;
+k = 75;
 %   load the origial mesh from off file:
 cube = Mesh('../meshes/companionCubeRemashed.off');
 %car.showMesh();
