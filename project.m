@@ -45,7 +45,7 @@ cow_cvt.showResults();
 
 %% For moomoo:
 %   set the number of sites for the Voronoi diagram:
-k = 50;
+k = 100;
 %   load the origial mesh from off file:
 moo = Mesh('../meshes/bunny2.off');
 %car.showMesh();

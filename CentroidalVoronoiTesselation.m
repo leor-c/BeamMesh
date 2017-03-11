@@ -1,6 +1,6 @@
 classdef CentroidalVoronoiTesselation < handle
     % Centroidal Voronoi Tesselation for a 3d mesh
-    %  
+    %  I denote K as the number of sites of the CVT.
     
     properties
         mesh
@@ -11,6 +11,15 @@ classdef CentroidalVoronoiTesselation < handle
         metricTensors
         voronoiVertices
         voronoiEdges
+        
+        %   a matrix of size |V| x K where each column j represents which
+        %   points p are assocciated with site j.
+        summationMatrix
+        
+        %   a matrix of size K x |V|, where each column i is distances of
+        %   point p_i from each site. so d_i,j is the distance of vertex j
+        %   from site i. distances are measured as described in article:
+        distancesMatrix
     end
     
     methods
@@ -83,6 +92,7 @@ classdef CentroidalVoronoiTesselation < handle
             %finish computation:
             res = distanceVec(:)' * res;
             res = reshape(res,obj.numberOfSites, V_size);
+            obj.distancesMatrix = res;
             [~,new_cells] = min(res);
             new_cells = new_cells';
             
@@ -92,9 +102,9 @@ classdef CentroidalVoronoiTesselation < handle
             %   then multiply transpose of p matrix by it. it will result
             %   in 3 X k matrix where each column is sum of all points in
             %   its cell.
-            summationMatrix = sparse(1:V_size, new_cells, ones(V_size,1));
-            cellSum = obj.mesh.vertices' * summationMatrix;
-            cellSize = sum(summationMatrix);
+            obj.summationMatrix = sparse(1:V_size, new_cells, ones(V_size,1));
+            cellSum = obj.mesh.vertices' * obj.summationMatrix;
+            cellSize = sum(obj.summationMatrix);
             for i=1:obj.numberOfSites
                 if cellSize ~= 0
                     cellSum(:,i) = cellSum(:,i) ./ cellSize(i);
@@ -119,14 +129,14 @@ classdef CentroidalVoronoiTesselation < handle
             %   summationMatrix (|V| x k) contain in the i-th column 1
             %   in indices of points that belong to cell i.
             V_size = obj.mesh.dimensions(1);
-            summationMatrix = sparse(1:V_size, obj.cells, ones(V_size,1));
+            obj.summationMatrix = sparse(1:V_size, obj.cells, ones(V_size,1));
             %   calc matrix whith |V| columns, where each col. i is the
             %   site coordinates of the site that p_i is in.
-            p_sites = obj.sites' * summationMatrix';
+            p_sites = obj.sites' * obj.summationMatrix';
             distanceMat = obj.mesh.vertices' - p_sites;
             
             for k=1:obj.numberOfSites
-                cellPointsDiff = distanceMat(:, find(summationMatrix(:,k)));
+                cellPointsDiff = distanceMat(:, find(obj.summationMatrix(:,k)));
                 new_metrics(:,:,k) = cellPointsDiff * cellPointsDiff';
             end
             
@@ -234,11 +244,64 @@ classdef CentroidalVoronoiTesselation < handle
             %   in the cell.
             N_V = obj.mesh.getVertexNormals()';
             V_size = obj.mesh.dimensions(1);
-            summationMatrix = sparse(1:V_size, obj.cells, ones(V_size,1));
+            obj.summationMatrix = sparse(1:V_size, obj.cells, ones(V_size,1));
             
-            N = N_V * summationMatrix;
-            cellSize = sum(summationMatrix);
+            N = N_V * obj.summationMatrix;
+            cellSize = sum(obj.summationMatrix);
             N = N ./ repmat(cellSize,3,1);
+        end
+        
+        function [d,r] = getRepresentativeVertices(obj)
+            %   compute for each cell its representative vertex, that is,
+            %   the vertex whose closest to the site of the cell. also,
+            %   include the distance from x_i.
+            [d,r] = min(obj.distancesMatrix,[],2);
+            unique_r = unique(r);
+            if (length(unique_r) < length(r))
+                disp('discarding sites!');
+                r = unique_r;
+            end
+        end
+        
+        function cells = getVoronoiCells(obj)
+            %   Compute cells according to 2nd article. (dijkstra like). I
+            %   will ignore k-d tree for simplicity. I will implement a
+            %   slight changed version of the algorithm: I will assume the
+            %   distances from real sites were computed in
+            %   obj.distancesMatrix. I will add vertices to queue only if a
+            %   neighbor was assigned to a cell. This will ensure
+            %   connectivity.
+            [d,r] = obj.getRepresentativeVertices();
+            
+            %   3-col matrix. 1st col is distance from site, 2nd col is
+            %   index of point p, and 3-rd is the site from which p is
+            %   measured.
+            Q = [d r (1:obj.numberOfSites)'];
+            Q = sortrows(Q);
+            
+            cells = zeros(obj.mesh.dimensions(1),1);
+            
+            while (~isempty(Q))
+                %   pop from queue:
+                current = Q(1,:);
+                Q(1,:) = []; % remove row
+                
+                %   assign to cell (if hasn't been assigned yet):
+                if (cells(current(2)) == 0)
+                    cells(current(2)) = current(3);
+                end
+                
+                %   add neighbors:
+                neighbors = find(obj.mesh.adjMatrix(current(2),:));
+                for neighbor=neighbors
+                    %   insert to Q if not assigned to cell yet:
+                    if (cells(neighbor) == 0)
+                        dist = obj.distancesMatrix(current(3), neighbor); 
+                        row = [dist neighbor current(3)];
+                        Q = [Q; row];
+                    end
+                end
+            end
         end
         
         function showResults(obj)
