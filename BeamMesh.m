@@ -3,10 +3,11 @@ classdef BeamMesh < handle
     %   * sites is the points x_i that determines the Voronoi cell.
     %   * VD_vertices - vertices of the voronoi diagram (not neccessarily
     %   needed)
-    %   * vertices is the v_i+, v_i- coordinates of the vertices of all
+    %   * vertices_plus/minus is the v_i+, v_i- coordinates of the vertices of all
     %   quads.
     properties
-        vertices
+        vertices_plus
+        vertices_minus
         faces
         verticesNormals
         numberOfSites
@@ -79,13 +80,21 @@ classdef BeamMesh < handle
         
         function CVT(obj, shape)
             %   Compute the Centroidal Voronoi Tesselation for the mesh.
-            %   (Voronoi diagram). Using Lloyd's algorythm.
+            %   (Voronoi diagram).
             cvt = CentroidalVoronoiTesselation(shape, obj.sites);
-            obj.sites = cvt.sites;
+            obj.importDataFromCVT(cvt);
+        end
+        
+        function importDataFromCVT(obj, cvtObj)
+            %   This enables you to generate beam mesh from an existing
+            %   CVT instance (class CentroidalVoronoiTesselation).
+            obj.sites = cvtObj.sites;
             
-            TODO set the vertices as v_i+-. ...
-                after cvt there is no need for original voronoi vertices.
-            %obj.vertices = cvt.voronoiVertices;
+            obj.VD_adjacencyMatrix = cvtObj.voronoiAdjMatrix;
+            obj.VD_vertices = 1000.*cvtObj.voronoiVertices;
+            
+            obj.vertices_plus = obj.VD_vertices + cvtObj.voronoiVertexNormals;
+            obj.vertices_minus = obj.VD_vertices - cvtObj.voronoiVertexNormals;
         end
         
         function generateBeamVertices(obj)
@@ -123,6 +132,27 @@ classdef BeamMesh < handle
             end
         end
         
+        function showBeamMesh(obj)
+            %   Visualize the beam mesh:
+            [V_size,~] = size(obj.VD_adjacencyMatrix);
+            
+            figure;
+            
+            for i=1:V_size
+                vertices = find(obj.VD_adjacencyMatrix(i,:));
+                for j=vertices
+                    X = [obj.vertices_minus(i,1) obj.vertices_plus(i,1) ...
+                        obj.vertices_plus(j,1) obj.vertices_minus(j,1)];
+                    Y = [obj.vertices_minus(i,2) obj.vertices_plus(i,2) ...
+                        obj.vertices_plus(j,2) obj.vertices_minus(j,2)];
+                    Z = [obj.vertices_minus(i,3) obj.vertices_plus(i,3) ...
+                        obj.vertices_plus(j,3) obj.vertices_minus(j,3)];
+                    fill3(X,Y,Z, 'g');
+                    hold on;
+                end
+            end
+            
+        end
         
         
     end
