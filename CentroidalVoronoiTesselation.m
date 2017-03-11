@@ -179,8 +179,6 @@ classdef CentroidalVoronoiTesselation < handle
             
             waitbar(0,w,'current iteration');
             
-            %profile on;
-            
             i=1;
             while i < numOfIterations
                 waitbar(i/numOfIterations);
@@ -206,9 +204,6 @@ classdef CentroidalVoronoiTesselation < handle
                     end
                 end
             end
-            
-            %profile off;
-            %profile viewer;
             
             close(w);
         end
@@ -385,7 +380,6 @@ classdef CentroidalVoronoiTesselation < handle
             alpha(0.85);
             hold on;
             
-            %[V_v,V_e] = obj.findVoronoiVertices();
             V_v = obj.voronoiVertices;
             V_e = obj.voronoiEdgeTriangles;
             scatter3(obj.sites(:,1),obj.sites(:,2),obj.sites(:,3),100,'filled','yellow');
