@@ -13,22 +13,29 @@ bunny_cvt.showResults();
 
 %% For Car:
 %   set the number of sites for the Voronoi diagram:
-k = 60;
+k = 50;
 %   load the origial mesh from off file:
-car = Mesh('../meshes/companionCubeRemashed.off');
+car = Mesh('../meshes/octane_smooth.off');
 %car.showMesh();
 car_bm = BeamMesh(car,k);
 
 %   Calculate CVT w/ respect to mean curvature:
 car_cvt = CentroidalVoronoiTesselation(car, car_bm.sites);
 %   show CVT results:
-car.showMesh(car_cvt.cells);
-alpha(0.85);
-hold on;
-[V_v,V_e] = car_cvt.findVoronoiVertices();
-scatter3(car_cvt.sites(:,1),car_cvt.sites(:,2),car_cvt.sites(:,3),100,'filled','yellow');
-scatter3(V_e(:,1),V_e(:,2),V_e(:,3),25,'filled','cyan');
-scatter3(V_v(:,1),V_v(:,2),V_v(:,3),50,'filled','red');
+car_cvt.showResults();
+
+%% For Companion Cube:
+%   set the number of sites for the Voronoi diagram:
+k = 6;
+%   load the origial mesh from off file:
+cube = Mesh('../meshes/companionCubeRemashed.off');
+%car.showMesh();
+cube_bm = BeamMesh(cube,k);
+
+%   Calculate CVT w/ respect to mean curvature:
+cube_cvt = CentroidalVoronoiTesselation(cube, cube_bm.sites);
+%   show CVT results:
+cube_cvt.showResults();
 
 %% For Cow:
 %   set the number of sites for the Voronoi diagram:
@@ -45,7 +52,7 @@ cow_cvt.showResults();
 
 %% For moomoo:
 %   set the number of sites for the Voronoi diagram:
-k = 100;
+k = 50;
 %   load the origial mesh from off file:
 moo = Mesh('../meshes/bunny2.off');
 %car.showMesh();

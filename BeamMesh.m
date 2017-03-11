@@ -46,8 +46,8 @@ classdef BeamMesh < handle
             H = shape.getMeanCurvature();
             % TRY SMOOTHING!:
             %L = shape.getLaplacian();
-            H = smooth(H,20);
-            H = smooth(H,20);
+            %H = smooth(H,20);
+            %H = smooth(H,20);
             [~, H_F] = shape.vertex_to_face_interp(H);
             %shape.showMesh(H_F);
 

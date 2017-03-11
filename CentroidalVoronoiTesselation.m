@@ -51,6 +51,7 @@ classdef CentroidalVoronoiTesselation < handle
             
             obj.runIterations();
             
+            obj.getVoronoiCells();
         end
         
         function iteration_dist = calculateCellsAndSites(obj)
@@ -195,8 +196,6 @@ classdef CentroidalVoronoiTesselation < handle
             %profile off;
             %profile viewer;
             
-            [obj.voronoiVertices, obj.voronoiEdges] = obj.findVoronoiVertices();
-            
             close(w);
         end
         
@@ -289,34 +288,38 @@ classdef CentroidalVoronoiTesselation < handle
                 %   assign to cell (if hasn't been assigned yet):
                 if (cells(current(2)) == 0)
                     cells(current(2)) = current(3);
-                end
-                
-                %   add neighbors:
-                neighbors = find(obj.mesh.adjMatrix(current(2),:));
-                for neighbor=neighbors
-                    %   insert to Q if not assigned to cell yet:
-                    if (cells(neighbor) == 0)
-                        dist = obj.distancesMatrix(current(3), neighbor); 
-                        row = [dist neighbor current(3)];
-                        Q = [Q; row];
+                    
+                    %   add neighbors:
+                    neighbors = find(obj.mesh.AdjMatrix(current(2),:));
+                    for neighbor=neighbors
+                        %   insert to Q if not assigned to cell yet:
+                        if (cells(neighbor) == 0)
+                            dist = obj.distancesMatrix(current(3), neighbor); 
+                            row = [dist neighbor current(3)];
+                            Q = [Q; row];
+                        end
                     end
                 end
+                
             end
+            
+            obj.cells = cells;
         end
         
         function showResults(obj)
             obj.mesh.showMesh(obj.cells);
             alpha(0.85);
             hold on;
+            
             [V_v,V_e] = obj.findVoronoiVertices();
             scatter3(obj.sites(:,1),obj.sites(:,2),obj.sites(:,3),100,'filled','yellow');
             scatter3(V_e(:,1),V_e(:,2),V_e(:,3),25,'filled','cyan');
             scatter3(V_v(:,1),V_v(:,2),V_v(:,3),50,'filled','red');
             
             % show normals:
-            N = obj.getFacesNormals();
-            quiver3(obj.sites(:,1), obj.sites(:,2), obj.sites(:,3) ...
-                ,N(1,:)', N(2,:)', N(3,:)','-k');
+            %N = obj.getFacesNormals();
+            %quiver3(obj.sites(:,1), obj.sites(:,2), obj.sites(:,3) ...
+            %    ,N(1,:)', N(2,:)', N(3,:)','-k');
         end
         
     end
