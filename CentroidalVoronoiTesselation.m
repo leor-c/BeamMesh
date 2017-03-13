@@ -63,9 +63,15 @@ classdef CentroidalVoronoiTesselation < handle
             
             obj.runIterations();
             
+            disp('Extracting Cells...');
             obj.getVoronoiCells();
             obj.findVoronoiVertices();
             obj.findVoronoiFaces();
+            
+            isValid = obj.validateCVT();
+            if(~isValid)
+                disp('CVT is BAD!!! run again with different conditions.');
+            end
         end
         
         function iteration_dist = calculateCellsAndSites(obj)
@@ -172,8 +178,8 @@ classdef CentroidalVoronoiTesselation < handle
             %   rest of the iterations until convergence.
             w = waitbar(0,'Initializing...');
             
-            obj.calculateCellsAndSites();
-            obj.calculateMetrics();
+            %obj.calculateCellsAndSites();
+            %obj.calculateMetrics();
             
             numOfIterations = 10;
             
@@ -288,6 +294,63 @@ classdef CentroidalVoronoiTesselation < handle
             
         end
         
+        function faces = findVoronoiFaces_omri(obj)
+            % ### This is not working well!
+            %   Try using omri's idea - using angles!
+            faces = cell(obj.numberOfSites);
+            
+            % the method is to find the closest point to the site in its
+            % cell, then using the normal and the cell's site, use them as
+            % reference point and define order clockwise of the vertices.
+            %   first, let's generate for each cell a list of it's
+            %   vertices:
+            [numOfV,~] = size(obj.voronoiVertices);
+            trimat = repmat(1:numOfV,3,1);
+            
+            %   matrix where each row i is 1 in indices of vetrices
+            %   assocciated with cell i, and 0 otherwise.
+            obj.voronoiCellVertices = sparse(obj.voronoiVertexNeighborCells', ...
+                trimat, ones(3*numOfV,1));
+            
+            obj.voronoiAdjMatrix = sparse(numOfV,numOfV);
+            
+            for k=1:obj.numberOfSites
+                %   use first vertex as reference point (direction on
+                %   plane). so for first vertex the angel is 0. so
+                %   calculate angles of vertiex 2-n:
+                vertices = find(obj.voronoiCellVertices(k,:));
+                n = length(vertices);
+                angles = zeros(n,1);
+                v_reference = (obj.voronoiVertices(vertices(1),:) - obj.sites(k,:))';
+                for v_idx=2:n
+                    v_current = (obj.voronoiVertices(vertices(v_idx),:) - obj.sites(k,:))';
+                    angles(v_idx) = obj.getAngleBetweenVectors(v_reference, v_current);
+                end
+                
+                Order = sortrows([angles vertices(:)]);
+                faces{k} = Order(:,2);
+                for v_idx = 1:(n-1)
+                    %   set an edge in adj Matrix:
+                    nxt = v_idx+1;
+                    obj.voronoiAdjMatrix(Order(v_idx, 2), Order(nxt, 2)) = 1;
+                    obj.voronoiAdjMatrix(Order(nxt, 2), Order(v_idx,2)) = 1;
+                end
+                %   now for first and last:
+                obj.voronoiAdjMatrix(Order(n, 2), Order(1, 2)) = 1;
+                obj.voronoiAdjMatrix(Order(1, 2), Order(n,2)) = 1;
+            end
+        end
+        
+        function angle = getAngleBetweenVectors(v1, v2)
+            n1 = norm(v1);
+            n2 = norm(v2);
+            if (n1 == 0 && n2 == 0)
+                angle = 0;
+                return;
+            end
+            angle = acos( dot(v1,v2) ./ (n1.*n2) );
+        end
+        
         function N = getFacesNormals(obj)
             %   For each voronoi cell calculate it's normal.
             %   for now, I'll do it by calculating the mean of all normals
@@ -375,6 +438,29 @@ classdef CentroidalVoronoiTesselation < handle
             obj.cells = cells;
         end
         
+        function isValid = validateCVT(obj)
+            %   In some cases the CVT isn't correct due to bad regions.
+            %   This method verifies that the adjacency matrix is good and
+            %   that means the connectivity is good.
+            n = nnz(obj.voronoiAdjMatrix);
+            %   number of non zero elements in adj matrix should be equal
+            %   to 2*|E| = 3*|V| = n.
+            isValid = true;
+            [v_size,~] = size(obj.voronoiVertices);
+            if (n/3 ~= v_size)
+                isValid = false;
+            end
+            
+            isSymmetric = obj.voronoiAdjMatrix - obj.voronoiAdjMatrix';
+            if (norm(isSymmetric(:)) ~= 0)
+                isValid = false;
+            end
+            
+            if (trace(obj.voronoiAdjMatrix) ~= 0)
+                isValid = false;
+            end
+        end
+        
         function showResults(obj)
             obj.mesh.showMesh(obj.cells);
             alpha(0.85);
@@ -392,15 +478,26 @@ classdef CentroidalVoronoiTesselation < handle
             %    ,N(1,:)', N(2,:)', N(3,:)','-k');
         end
         
-        function showPolygon(obj)
+        function showPolygon(obj, mixed)
             %   show polygonal approximation using adj matrix:
-            obj.mesh.showMesh(obj.cells);
-            alpha(0.5);
-            hold on;
-            %figure;
+            %   the mixed argument lets you choose weater to show the
+            %   original mesh also or not
+            if (nargin < 2)
+                mixed = false;
+            end
+            if (mixed)
+                obj.mesh.showMesh(obj.cells);
+                alpha(0.5);
+                hold on;
+            else
+                figure;
+            end
             [numOfV,~] = size(obj.voronoiVertices);
             for i=1:numOfV
-                vertices = find(obj.voronoiAdjMatrix(i,:));
+                vertices = find(obj.voronoiAdjMatrix(i,1:i));
+                if (isempty(vertices))
+                    continue;
+                end
                 for j=vertices
                     edge = [obj.voronoiVertices(i,:)' obj.voronoiVertices(j,:)'];
                     plot3(edge(1,:),edge(2,:),edge(3,:),'-k','LineWidth',3);
@@ -409,7 +506,7 @@ classdef CentroidalVoronoiTesselation < handle
             end
         end
         
-    end
+    end %   end of methods
     
-end
+end %   end of class
 

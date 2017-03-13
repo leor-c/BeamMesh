@@ -15,18 +15,36 @@ classdef BeamMesh < handle
         sites
         VD_vertices
         VD_adjacencyMatrix
+        beamHeight
+        heightTolerance
     end
     
     methods
-        function obj = BeamMesh(shape, k)
+        function obj = BeamMesh(shape, k, beamHeight, heightTolerance)
             %   Initialize a Beam Mesh. 
             %   Params: 
             %       -   shape: an input mesh of the shape to approximate
             %       -   k: number of sites \ cells
+            %       -   beamHeight: the desired height for each beam. will
+            %       be set to default value if not passed.
+            %       -   heightTolerance: tolerance for each beam how far
+            %       it can be from the target height. will be set to
+            %       default value if not passed
             
             
             
             obj.numberOfSites = k;
+            
+            if (nargin <= 2)
+                obj.beamHeight = 2;
+                obj.heightTolerance = 0.02;
+            elseif (nargin == 3)
+                obj.beamHeight = beamHeight;
+                obj.heightTolerance = 0.02;
+            else
+                obj.beamHeight = beamHeight;
+                obj.heightTolerance = heightTolerance;
+            end
             
             %   init metric tensors:
             metricTensors = zeros(3,3,k);
@@ -88,48 +106,231 @@ classdef BeamMesh < handle
         function importDataFromCVT(obj, cvtObj)
             %   This enables you to generate beam mesh from an existing
             %   CVT instance (class CentroidalVoronoiTesselation).
+            if (~cvtObj.validateCVT())
+                disp('CVT is BAD, please build another one.');
+                return;
+            end
             obj.sites = cvtObj.sites;
             
             obj.VD_adjacencyMatrix = cvtObj.voronoiAdjMatrix;
-            obj.VD_vertices = 1000.*cvtObj.voronoiVertices;
+            obj.VD_vertices = cvtObj.voronoiVertices;
+            
+            %normailze the mesh coordinates so they are around 100:
+            targetMean = 100;
+            meandist = norm(mean(obj.VD_vertices));
+            c = targetMean/meandist;
+            obj.VD_vertices = c .* obj.VD_vertices;
             
             obj.vertices_plus = obj.VD_vertices + cvtObj.voronoiVertexNormals;
             obj.vertices_minus = obj.VD_vertices - cvtObj.voronoiVertexNormals;
         end
         
-        function generateBeamVertices(obj)
-            %   As described, for each vertex of the Voronoi Diagram, 
-            %   calculate the normal of the vertex, then set v_i+-
-            %   accordingly. Normals are calculated using sum of normals to
-            %   adjacent faces (cross products of adjacent incident edge
-            %   vectors).
-            TODO implement this function
-        end
-        
-        function projectBeamConstraints(obj)
+        function BeamEdgesMat = getBeamEdges(obj,i,j)
+            %   calculate the beam generated from vertices i,j (+-).
+            %   direction is from minus to plus.
+            %   output matrix is composed of 4 column vectors, each
+            %   represents an edge of the beam.
+            %   column 1 is e_nrml_i, column 2 is e_nrml_j,
+            %   column 3 is e_ofst_pl, column 4 is e_ofst_mi
+            
+            e_nrml_i = (obj.vertices_plus(i,:) - obj.vertices_minus(i,:))';
+            e_nrml_j = (obj.vertices_plus(j,:) - obj.vertices_minus(j,:))';
+            e_ofst_pl = (obj.vertices_plus(j,:) - obj.vertices_plus(i,:))';
+            e_ofst_mi = (obj.vertices_minus(j,:) - obj.vertices_minus(i,:))';
+            
+            BeamEdgesMat = [e_nrml_i e_nrml_j e_ofst_pl e_ofst_mi];
             
         end
         
-        function planarity_projection = getPlanarityProjection(obj)
+        function [v_i, v_j, e_ij] = getMidVertices(obj, i, j)
+            %   get the vertices in the middle of the normal edges
+            v_i = (obj.vertices_plus(i,:) + obj.vertices_minus(i,:))./2;
+            v_j = (obj.vertices_plus(j,:) + obj.vertices_minus(j,:))./2;
+            e_ij = (v_j - v_i)';
+        end
+        
+        function [n_i, n_j] = getBeamNormals(obj, i, j)
+            %   get normals to mid vertices v_i, v_j as described in
+            %   article:
+            [v_i, v_j, ~] = obj.getMidVertices(i, j);
+            n_i = (obj.vertices_plus(i,:) - v_i)';
+            n_j = (obj.vertices_plus(j,:) - v_j)';
+        end
+        
+        function distance = projectBeamConstraints(obj)
+            %   Projects all the constraints needed for the mesh as
+            %   described in the article. I will implement it as I
+            %   understand though, and build a matrix A so the global step
+            %   is ||AV-p||2^2. The matrix A is constructed so each row
+            %   will represent an edge (because we're projecting edges).
+            %   For all projections Im assumming that A is constructed the
+            %   following way: each row is |V+| + |V-| long, and first |V|
+            %   indices are for v+ vertices and the last |V| are for v-.
+            %   each row represents an edge of the projection.
+            
+            %   For this to work, it is neccessary that all vertices
+            %   invovled will be centered at the mean of their positions.
+            %   in this application, all vertices involved in all
+            %   projections so I'll just center them once:
+            %   Actually, it is neccessary for LS to be 0 if projection =
+            %   vertices positions, but here Im working with edges, so no
+            %   need to center vertices as far as I understand.
+            [n,~] = size(obj.VD_vertices);
+            %   by definition in the article:
+            %{
+            N = kron( ( speye(2*n) - (1/(2*n)).*ones((2*n),(2*n)) ), speye(3) );
+            V = [obj.vertices_plus; obj.vertices_minus];
+            V = V';
+            centeredV = N*(V(:))';
+            %}
+            
+            [A_planarity, p_planarity] = obj.getPlanarityProjection();
+            [A_height, p_height] = obj.getHeightProjection();
+            
+            A = [A_planarity; A_height];
+            p = [p_planarity; p_height];
+            
+            newV = kron(speye(3), A) \ p(:);
+            newV = reshape(newV, 2*n, 3);
+            
+            diff_plus = newV(1:n,:) - obj.vertices_plus;
+            diff_minus = newV((n+1):end,:) - obj.vertices_minus;
+            distance = trace(diff_plus*diff_plus') + trace(diff_minus*diff_minus');
+            
+            obj.vertices_plus = newV(1:n,:);
+            obj.vertices_minus = newV((n+1):end,:);
+        end
+        
+        function convergeConstraints(obj)
+            for i=1:100
+                d = obj. projectBeamConstraints();
+                disp(['current distance: ' num2str(d)]);
+            end
+        end
+        
+        function [A, planarity_projection] = getPlanarityProjection(obj)
             %   Calculate the projection for the planarity constraint.
             %   For each row in adj. matrix, there will be exactly 3
             %   nonzero values. because adj. matrix is symmetric, let's
-            %   operate only on upper triange. for each edge (that define a
-            %   beam) for all beam edges, project it.
+            %   operate only on lower triangle. for each edge (that defines
+            %   a beam) for all beam edges, project it.
             [n,~] = size(obj.VD_vertices);
             %   for each edge in VD, there are 4 edges in the beam mesh.
-            %   number of edges is (3/2 * 2)|VD_vertices| = 3*|VD_vertices|
-            planarity_constraints = 12*n;
-            planarity_projection = zeros(planarity_constraints,1);
+            %   number of edges is (3/2)|VD_vertices|
+            planarity_constraints = 6*n;
+            planarity_projection = zeros(planarity_constraints, 3);
+            
+            A_i = repmat(1:planarity_constraints, 2, 1);
+            A_i = A_i(:);
+            A_j = zeros(2*planarity_constraints, 1);
+            A_val = [ones(1, planarity_constraints); (-1).*ones(1, planarity_constraints)];
+            A_val = A_val(:);
+            
+            current = 1;
             
             for i=1:n
                 % for vertex i in VD_vertices:
-                %   get neighbors to v_i from upper triangle of adj. mat.
-                neighbors = find(obj.VD_adjacencyMatrix(i,i:end));
+                %   get neighbors to v_i from lower triangle of adj. mat.
+                neighbors = find(obj.VD_adjacencyMatrix(i,1:i));
+                
                 for j = neighbors
-                    TODO project edges of beam defined by v_i and v_j
+                    [n_i, n_j] = obj.getBeamNormals(i, j);
+                    [~, ~, e_ij] = obj.getMidVertices(i, j);
+                    n_ij = cross( (n_i + n_j), e_ij);
+                    
+                    %   assumming the order of the edges is e_nrml_i,
+                    %   e_nrml_j, e_ofst_pl, e_ofst_mi: I will assemble the
+                    %   required A matrix rows for the projection:
+                    %   the code below means: in the 'current' row, and
+                    %   i-th column (for example) put the value (1 or -1).
+                    %   e_nrml_i:
+                    current_j_idx = 8*((current-1)/4);
+                    A_j(current_j_idx + 1) = i; % v_i+
+                    A_j(current_j_idx + 2) = n + i; % v_i-
+                    %   e_nrml_j:
+                    A_j(current_j_idx + 3) = j; % v_j+
+                    A_j(current_j_idx + 4) = n + j; % v_j-
+                    %   e_ofst_pl:
+                    A_j(current_j_idx + 5) = j; % v_j+
+                    A_j(current_j_idx + 6) = i; % v_i+
+                    %   e_ofst_mi:
+                    A_j(current_j_idx + 7) = n + j; % v_j-
+                    A_j(current_j_idx + 8) = n + i; % v_i-
+                    
+                    BeamEdgesMat = obj.getBeamEdges(i,j);
+                    for edge_idx=1:4
+                        edge = BeamEdgesMat(:, edge_idx);
+                        c = (edge' * n_ij)./(n_ij' * n_ij);
+                        planarity_projection(current,:) = (edge - c.*n_ij)';
+                        
+                        current = current + 1;
+                    end
                 end
             end
+            
+            A = sparse(A_i(:), A_j, A_val(:), 6*n, 2*n);
+        end
+        
+        function [A_height, height_projection] = getHeightProjection(obj)
+            %   I will use the 1st option suggested: use one target height
+            %   and a tolerance variable.
+            %   each beam is going to yield 2 constraints
+            [n,~] = size(obj.VD_vertices);
+            %   there are 2|E| = 2*(3/2)|V| = 3|V| constraints
+            height_constrinats = 3*n;
+            height_projection = zeros(height_constrinats, 3);
+            
+            A_i = repmat(1:height_constrinats, 2, 1);
+            A_i = A_i(:);
+            A_j = zeros(2*height_constrinats, 1);
+            A_val = [ones(1, height_constrinats); (-1).*ones(1, height_constrinats)];
+            A_val = A_val(:);
+            
+            current = 1;
+            
+            for i=1:n
+                %   get neighbors to v_i from lower triangle of adj. mat.
+                neighbors = find(obj.VD_adjacencyMatrix(i,1:i));
+                
+                for j = neighbors
+                    [n_i, n_j] = obj.getBeamNormals(i, j);
+                    [~, ~, e_ij] = obj.getMidVertices(i, j);
+                    
+                    %   assumming the order of the edges is e_nrml_i,
+                    %   e_nrml_j, e_ofst_pl, e_ofst_mi: I will assemble the
+                    %   required A matrix rows for the projection:
+                    %   the code below means: in the 'current' row, and
+                    %   i-th column (for example) put the value (1 or -1).
+                    %   e_nrml_i:
+                    current_j_idx = 4*((current-1)/2);
+                    A_j(current_j_idx + 1) = i; % v_i+
+                    A_j(current_j_idx + 2) = n + i; % v_i-
+                    %   e_nrml_j:
+                    A_j(current_j_idx + 3) = j; % v_j+
+                    A_j(current_j_idx + 4) = n + j; % v_j-
+                    
+                    nrmls = [n_i n_j];
+                    
+                    BeamEdgesMat = obj.getBeamEdges(i,j);
+                    for idx=1:2
+                        c = (nrmls(:,idx)' * e_ij)./(e_ij' * e_ij);
+                        h_ij = 2*(nrmls(:,idx) - c.*e_ij);
+                        h_ij_len = norm(h_ij);
+                        if (norm(h_ij_len - obj.beamHeight) > obj.heightTolerance)
+                            if (h_ij_len > obj.beamHeight)
+                                constraint = ((obj.beamHeight+obj.heightTolerance)/h_ij_len).*BeamEdgesMat(:,idx);
+                            else
+                                constraint = ((obj.beamHeight-obj.heightTolerance)/h_ij_len).*BeamEdgesMat(:,idx);
+                            end
+                        else
+                            constraint = BeamEdgesMat(:,idx);
+                        end
+                        height_projection(current,:) = constraint;
+                        current = current + 1;
+                    end
+                end
+            end
+            A_height = sparse(A_i(:), A_j, A_val(:), 3*n, 2*n);
         end
         
         function showBeamMesh(obj)
@@ -137,9 +338,12 @@ classdef BeamMesh < handle
             [V_size,~] = size(obj.VD_adjacencyMatrix);
             
             figure;
-            
+            axis equal;
             for i=1:V_size
-                vertices = find(obj.VD_adjacencyMatrix(i,:));
+                vertices = find(obj.VD_adjacencyMatrix(i,1:i));
+                if(isempty(vertices))
+                    continue;
+                end
                 for j=vertices
                     X = [obj.vertices_minus(i,1) obj.vertices_plus(i,1) ...
                         obj.vertices_plus(j,1) obj.vertices_minus(j,1)];
@@ -151,9 +355,6 @@ classdef BeamMesh < handle
                     hold on;
                 end
             end
-            
         end
-        
-        
     end
 end
