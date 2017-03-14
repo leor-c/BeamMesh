@@ -61,16 +61,24 @@ classdef CentroidalVoronoiTesselation < handle
                 obj.metricTensors{i} = speye(3);
             end
             
-            obj.runIterations();
+            success = obj.runIterations();
+            if (~success)
+                return;
+            end
             
             disp('Extracting Cells...');
             obj.getVoronoiCells();
             obj.findVoronoiVertices();
             obj.findVoronoiFaces();
             
+            
             isValid = obj.validateCVT();
             if(~isValid)
-                disp('CVT is BAD!!! run again with different conditions.');
+                disp('Trying to repair CVT...');
+                obj.repairCVT();
+                if(~obj.validateCVT())
+                    disp('CVT is BAD!!! run again with different conditions.');
+                end
             end
         end
         
@@ -108,7 +116,8 @@ classdef CentroidalVoronoiTesselation < handle
             % we'll have k distances for each point p. then we'll get the
             % minimum.
             triMat = repmat(1:(obj.numberOfSites * V_size),3,1);
-            res = sparse(1:(3 * obj.numberOfSites * V_size), triMat(:), res);
+            rowNum = (3 * obj.numberOfSites * V_size);
+            res = sparse(1:rowNum, triMat(:), res, rowNum, obj.numberOfSites * V_size);
             
             %finish computation:
             res = distanceVec(:)' * res;
@@ -173,9 +182,10 @@ classdef CentroidalVoronoiTesselation < handle
             obj.metrics = new_metrics;
         end
         
-        function runIterations(obj)
+        function success = runIterations(obj)
             %   do first iteration, then compute metrics, and then do the
             %   rest of the iterations until convergence.
+            success = true;
             w = waitbar(0,'Initializing...');
             
             %obj.calculateCellsAndSites();
@@ -196,6 +206,12 @@ classdef CentroidalVoronoiTesselation < handle
                 ' distance from centroid = ' num2str(iteration_dist)]);
                 
                 if iteration_dist == 0
+                    if (i == 1)
+                        close(w);
+                        disp('bad initial sites, please try again.');
+                        success = false;
+                        return;
+                    end
                     break;
                 end
                 i = i+1;
@@ -397,6 +413,8 @@ classdef CentroidalVoronoiTesselation < handle
             
             cells = zeros(obj.mesh.dimensions(1),1);
             
+            [r,c] = find(obj.mesh.AdjMatrix);
+            
             while (~isempty(Q))
                 %   pop from queue:
                 current = Q(start,:);
@@ -412,7 +430,10 @@ classdef CentroidalVoronoiTesselation < handle
                     cells(current(2)) = current(3);
                     
                     %   add neighbors:
-                    neighbors = find(obj.mesh.AdjMatrix(current(2),:));
+                    %neighbors = find(obj.mesh.AdjMatrix(current(2),:));
+                    %efficient try:
+                    neighbors = find(r == current(2));
+                    neighbors = c(neighbors)';
                     for neighbor=neighbors
                         %   insert to Q if not assigned to cell yet:
                         if (cells(neighbor) == 0)
@@ -436,6 +457,54 @@ classdef CentroidalVoronoiTesselation < handle
             end
             
             obj.cells = cells;
+        end
+        
+        function discardInvalidCells(obj)
+            %   try removing cells with less than 3 voronoi vertices, and
+            %   cells with less than some kind of threshold of vertices.
+            cellsVertices = sum(obj.voronoiCellVertices, 2);
+            toDiscard = find(cellsVertices < 3);
+            discarded = length(toDiscard);
+            obj.numberOfSites = obj.numberOfSites - discarded;
+            if (discarded < 1)
+                %   try discarding the smallest site:
+                %[~,toDiscard] = min(cellsVertices);
+                toDiscard = find(cellsVertices <= 3);
+                discarded = length(toDiscard);
+                if (discarded > 0)
+                    k = ceil(discarded/5);
+                    toDiscard = datasample(toDiscard,k);
+                    obj.numberOfSites = obj.numberOfSites - k;
+                else
+                    return;
+                end
+            end
+            for c=toDiscard
+                obj.sites(c,:) = [];
+                obj.voronoiCellVertices(c,:) = [];
+                obj.distancesMatrix(c,:) = [];
+                obj.summationMatrix(:,c) = [];
+            end
+        end
+        
+        function repairCVT(obj)
+            %   try discarding sites in hope to repair:
+            %threshold = obj.numberOfSites - 1;
+            cur_num_of_sites = obj.numberOfSites;
+            tries = 1;
+            while (~obj.validateCVT())
+                disp(['Repair try #' num2str(tries)]);
+                obj.discardInvalidCells();
+                obj.getVoronoiCells();
+                obj.findVoronoiVertices();
+                obj.findVoronoiFaces();
+                change = cur_num_of_sites - obj.numberOfSites;
+                if (change == 0)
+                    break
+                end
+                tries = tries + 1;
+                cur_num_of_sites = obj.numberOfSites;
+            end
         end
         
         function isValid = validateCVT(obj)

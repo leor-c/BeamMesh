@@ -17,10 +17,11 @@ classdef BeamMesh < handle
         VD_adjacencyMatrix
         beamHeight
         heightTolerance
+        minEdgeLengthThreshold
     end
     
     methods
-        function obj = BeamMesh(shape, k, beamHeight, heightTolerance)
+        function obj = BeamMesh(shape, k, beamHeight, heightTolerance, edgeLenThreshold)
             %   Initialize a Beam Mesh. 
             %   Params: 
             %       -   shape: an input mesh of the shape to approximate
@@ -44,6 +45,11 @@ classdef BeamMesh < handle
             else
                 obj.beamHeight = beamHeight;
                 obj.heightTolerance = heightTolerance;
+            end
+            if (nargin < 5)
+                obj.minEdgeLengthThreshold = 2;
+            else
+                obj.minEdgeLengthThreshold = edgeLenThreshold;
             end
             
             %   init metric tensors:
@@ -114,6 +120,7 @@ classdef BeamMesh < handle
             
             obj.VD_adjacencyMatrix = cvtObj.voronoiAdjMatrix;
             obj.VD_vertices = cvtObj.voronoiVertices;
+            obj.verticesNormals = cvtObj.voronoiVertexNormals;
             
             %normailze the mesh coordinates so they are around 100:
             targetMean = 100;
@@ -186,9 +193,12 @@ classdef BeamMesh < handle
             
             [A_planarity, p_planarity] = obj.getPlanarityProjection();
             [A_height, p_height] = obj.getHeightProjection();
+            [A_parallel, p_parallel] = obj.getParallelityProjection();
+            [A_offset, p_offset] = obj.getOffsetDirProjection();
+            [A_length, p_length] = obj.getMinLengthProjection();
             
-            A = [A_planarity; A_height];
-            p = [p_planarity; p_height];
+            A = [A_planarity; A_height; A_parallel; A_offset; A_length];
+            p = [p_planarity; p_height; p_parallel; p_offset; p_length];
             
             newV = kron(speye(3), A) \ p(:);
             newV = reshape(newV, 2*n, 3);
@@ -331,6 +341,136 @@ classdef BeamMesh < handle
                 end
             end
             A_height = sparse(A_i(:), A_j, A_val(:), 3*n, 2*n);
+        end
+        
+        function [A_parallel, p_parallel] = getParallelityProjection(obj)
+            [n,~] = size(obj.VD_vertices);
+            %   there are 2|E| = 2*(3/2)|V| = 3|V| constraints
+            parallel_constrinats = 3*n;
+            p_parallel = zeros(parallel_constrinats, 3);
+            
+            A_i = repmat(1:parallel_constrinats, 2, 1);
+            A_i = A_i(:);
+            A_j = zeros(2*parallel_constrinats, 1);
+            A_val = [ones(1, parallel_constrinats); (-1).*ones(1, parallel_constrinats)];
+            A_val = A_val(:);
+            
+            current = 1;
+            
+            for i=1:n
+                %   get neighbors to v_i from lower triangle of adj. mat.
+                neighbors = find(obj.VD_adjacencyMatrix(i,1:i));
+                
+                for j = neighbors
+                    [~, ~, e_ij] = obj.getMidVertices(i, j);
+                    BeamEdgesMat = obj.getBeamEdges(i,j);
+                    %   assumming the order of the edges is e_nrml_i,
+                    %   e_nrml_j, e_ofst_pl, e_ofst_mi: I will assemble the
+                    %   required A matrix rows for the projection:
+                    current_j_idx = 4*((current-1)/2);
+                    A_j(current_j_idx + 1) = j; % v_j+
+                    A_j(current_j_idx + 2) = i; % v_i+
+                    %   e_ofst_mi:
+                    A_j(current_j_idx + 3) = n + j; % v_j-
+                    A_j(current_j_idx + 4) = n + i; % v_i-
+                    
+                    for idx=3:4
+                        c = (e_ij' * BeamEdgesMat(:,idx))./(e_ij' * e_ij);
+                        p_parallel(current,:) = c.*e_ij;
+                        current = current + 1;
+                    end
+                end
+            end
+            A_parallel = sparse(A_i(:), A_j, A_val(:), 3*n, 2*n);
+        end
+        
+        function [A_offset, p_offset] = getOffsetDirProjection(obj)
+            [n,~] = size(obj.VD_vertices);
+            %   there are 2|E| = 2*(3/2)|V| = 3|V| constraints
+            offset_constrinats = 3*n;
+            p_offset = zeros(offset_constrinats, 3);
+            
+            A_i = repmat(1:offset_constrinats, 2, 1);
+            A_i = A_i(:);
+            A_j = zeros(2*offset_constrinats, 1);
+            A_val = [ones(1, offset_constrinats); (-1).*ones(1, offset_constrinats)];
+            A_val = A_val(:);
+            
+            current = 1;
+            
+            for i=1:n
+                %   get neighbors to v_i from lower triangle of adj. mat.
+                neighbors = find(obj.VD_adjacencyMatrix(i,1:i));
+                
+                for j = neighbors
+                    BeamEdgesMat = obj.getBeamEdges(i,j);
+                    %   assumming the order of the edges is e_nrml_i,
+                    %   e_nrml_j, e_ofst_pl, e_ofst_mi: I will assemble the
+                    %   required A matrix rows for the projection:
+                    current_j_idx = 4*((current-1)/2);
+                    A_j(current_j_idx + 1) = i; % v_i+
+                    A_j(current_j_idx + 2) = n + i; % v_i-
+                    %   e_ofst_mi:
+                    A_j(current_j_idx + 3) = j; % v_j+
+                    A_j(current_j_idx + 4) = n + j; % v_j-
+                    
+                    dir_i = (BeamEdgesMat(:,1)'*(obj.verticesNormals(i,:)'./norm(obj.verticesNormals(i,:)))).* obj.verticesNormals(i,:);
+                    p_offset(current,:) = dir_i;
+                    dir_j = (BeamEdgesMat(:,2)'*(obj.verticesNormals(j,:)'./norm(obj.verticesNormals(j,:)))).* obj.verticesNormals(j,:);
+                    p_offset(current+1,:) = dir_j;
+                    current = current + 2;
+                end
+            end
+            A_offset = sparse(A_i(:), A_j, A_val(:), 3*n, 2*n);
+        end
+        
+        function [A_length, p_length] = getMinLengthProjection(obj)
+            [n,~] = size(obj.VD_vertices);
+            %   there are 2|E| = 2*(3/2)|V| = 3|V| constraints
+            length_constrinats = 3*n;
+            p_length = zeros(length_constrinats, 3);
+            
+            A_i = repmat(1:length_constrinats, 2, 1);
+            A_i = A_i(:);
+            A_j = zeros(2*length_constrinats, 1);
+            A_val = [ones(1, length_constrinats); (-1).*ones(1, length_constrinats)];
+            A_val = A_val(:);
+            
+            current = 1;
+            
+            for i=1:n
+                %   get neighbors to v_i from lower triangle of adj. mat.
+                neighbors = find(obj.VD_adjacencyMatrix(i,1:i));
+                
+                for j = neighbors
+                    BeamEdgesMat = obj.getBeamEdges(i,j);
+                    %   assumming the order of the edges is e_nrml_i,
+                    %   e_nrml_j, e_ofst_pl, e_ofst_mi: I will assemble the
+                    %   required A matrix rows for the projection:
+                    current_j_idx = 4*((current-1)/2);
+                    A_j(current_j_idx + 1) = j; % v_j+
+                    A_j(current_j_idx + 2) = i; % v_i+
+                    %   e_ofst_mi:
+                    A_j(current_j_idx + 3) = n + j; % v_j-
+                    A_j(current_j_idx + 4) = n + i; % v_i-
+                    
+                    e_pl_len = norm(BeamEdgesMat(:,3));
+                    if (e_pl_len < obj.minEdgeLengthThreshold)
+                        p_length(current,:) = (obj.minEdgeLengthThreshold / e_pl_len).* (BeamEdgesMat(:,3)');
+                    else
+                        p_length(current,:) = BeamEdgesMat(:,3)';
+                    end
+                    
+                    e_mi_len = norm(BeamEdgesMat(:,4));
+                    if (e_mi_len < obj.minEdgeLengthThreshold)
+                        p_length(current+1,:) = (obj.minEdgeLengthThreshold / e_mi_len).* (BeamEdgesMat(:,4)');
+                    else
+                        p_length(current+1,:) = BeamEdgesMat(:,4)';
+                    end
+                    current = current + 2;
+                end
+            end
+            A_length = sparse(A_i(:), A_j, A_val(:), 3*n, 2*n);
         end
         
         function showBeamMesh(obj)
