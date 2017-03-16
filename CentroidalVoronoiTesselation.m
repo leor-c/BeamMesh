@@ -158,15 +158,20 @@ classdef CentroidalVoronoiTesselation < handle
             %   compute C_i:
             %   summationMatrix (|V| x k) contain in the i-th column 1
             %   in indices of points that belong to cell i.
-            V_size = obj.mesh.dimensions(1);
-            obj.summationMatrix = sparse(1:V_size, obj.cells, ones(V_size,1));
+            %V_size = obj.mesh.dimensions(1);
+            %obj.summationMatrix = sparse(1:V_size, obj.cells, ones(V_size,1));
             %   calc matrix whith |V| columns, where each col. i is the
             %   site coordinates of the site that p_i is in.
             p_sites = obj.sites' * obj.summationMatrix';
             distanceMat = obj.mesh.vertices' - p_sites;
             
             for k=1:obj.numberOfSites
-                cellPointsDiff = distanceMat(:, find(obj.summationMatrix(:,k)));
+                idx = find(obj.summationMatrix(:,k));
+                if (isempty(idx))
+                    new_metrics(:,:,k) = speye(3);
+                    continue;
+                end
+                cellPointsDiff = distanceMat(:, idx);
                 new_metrics(:,:,k) = cellPointsDiff * cellPointsDiff';
             end
             

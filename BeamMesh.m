@@ -18,10 +18,15 @@ classdef BeamMesh < handle
         beamHeight
         heightTolerance
         minEdgeLengthThreshold
+        thickness
+        radii
+        thick_vertices_plus
+        thick_vertices_minus
     end
     
     methods
-        function obj = BeamMesh(shape, k, beamHeight, heightTolerance, edgeLenThreshold)
+        function obj = BeamMesh(shape, k, beamHeight, heightTolerance, ...
+                edgeLenThreshold, thickness)
             %   Initialize a Beam Mesh. 
             %   Params: 
             %       -   shape: an input mesh of the shape to approximate
@@ -37,7 +42,7 @@ classdef BeamMesh < handle
             obj.numberOfSites = k;
             
             if (nargin <= 2)
-                obj.beamHeight = 2;
+                obj.beamHeight = 3;
                 obj.heightTolerance = 0.02;
             elseif (nargin == 3)
                 obj.beamHeight = beamHeight;
@@ -50,6 +55,12 @@ classdef BeamMesh < handle
                 obj.minEdgeLengthThreshold = 2;
             else
                 obj.minEdgeLengthThreshold = edgeLenThreshold;
+            end
+            
+            if (nargin < 6)
+                obj.thickness = 1;
+            else
+                obj.thickness = thickness;
             end
             
             %   init metric tensors:
@@ -75,7 +86,7 @@ classdef BeamMesh < handle
             %H = smooth(H,20);
             [~, H_F] = shape.vertex_to_face_interp(H);
             %shape.showMesh(H_F);
-
+            
             %   Use mean curvature as density function, to randomly sample points:
             %   compute the cumulative distribution function
             F_X = H_F;
@@ -85,7 +96,7 @@ classdef BeamMesh < handle
                 F_X(i) = sum;
             end
             F_X = F_X ./ sum;
-
+            %{
             %   Use random variable transformation: use F_X to find the inverse by
             %   finding for a value the last index that F_X <= x, so the uniform
             %   variable U (random_sample) has mean curvature distribution.
@@ -100,6 +111,13 @@ classdef BeamMesh < handle
                     obj.sites(i,:) = obj.sites(i,:) + shape.vertices(shape.faces(face,j),:)./3;
                 end
             end
+            %}
+            %   Better way to do this:
+            [~,idx] = datasample(shape.faces, obj.numberOfSites,...
+                'Weights', H_F./sum, 'Replace', false);
+            facesCenters = shape.getFacesCenters();
+            obj.sites = facesCenters(idx,:);
+            
         end
         
         function CVT(obj, shape)
@@ -151,20 +169,20 @@ classdef BeamMesh < handle
         
         function [v_i, v_j, e_ij] = getMidVertices(obj, i, j)
             %   get the vertices in the middle of the normal edges
-            v_i = (obj.vertices_plus(i,:) + obj.vertices_minus(i,:))./2;
-            v_j = (obj.vertices_plus(j,:) + obj.vertices_minus(j,:))./2;
-            e_ij = (v_j - v_i)';
+            v_i = (obj.vertices_plus(i,:) + obj.vertices_minus(i,:))'./2;
+            v_j = (obj.vertices_plus(j,:) + obj.vertices_minus(j,:))'./2;
+            e_ij = (v_j - v_i);
         end
         
         function [n_i, n_j] = getBeamNormals(obj, i, j)
             %   get normals to mid vertices v_i, v_j as described in
             %   article:
             [v_i, v_j, ~] = obj.getMidVertices(i, j);
-            n_i = (obj.vertices_plus(i,:) - v_i)';
-            n_j = (obj.vertices_plus(j,:) - v_j)';
+            n_i = (obj.vertices_plus(i,:) - v_i')';
+            n_j = (obj.vertices_plus(j,:) - v_j')';
         end
         
-        function distance = projectBeamConstraints(obj)
+        function distance = projectBeamConstraints(obj, withOffset)
             %   Projects all the constraints needed for the mesh as
             %   described in the article. I will implement it as I
             %   understand though, and build a matrix A so the global step
@@ -190,6 +208,9 @@ classdef BeamMesh < handle
             V = V';
             centeredV = N*(V(:))';
             %}
+            if (nargin<2)
+                withOffset = true;
+            end
             
             [A_planarity, p_planarity] = obj.getPlanarityProjection();
             [A_height, p_height] = obj.getHeightProjection();
@@ -197,8 +218,13 @@ classdef BeamMesh < handle
             [A_offset, p_offset] = obj.getOffsetDirProjection();
             [A_length, p_length] = obj.getMinLengthProjection();
             
-            A = [A_planarity; A_height; A_parallel; A_offset; A_length];
-            p = [p_planarity; p_height; p_parallel; p_offset; p_length];
+            if (withOffset)
+                A = [A_planarity; A_height; A_parallel; A_offset; A_length];
+                p = [p_planarity; p_height; p_parallel; p_offset; p_length];
+            else
+                A = [A_planarity; A_height; A_parallel; A_length];
+                p = [p_planarity; p_height; p_parallel; p_length];
+            end
             
             newV = kron(speye(3), A) \ p(:);
             newV = reshape(newV, 2*n, 3);
@@ -211,9 +237,13 @@ classdef BeamMesh < handle
             obj.vertices_minus = newV((n+1):end,:);
         end
         
-        function convergeConstraints(obj)
+        function convergeConstraints(obj, withOffset)
+            if(nargin < 2)
+                withOffset = true;
+            end
+            
             for i=1:100
-                d = obj. projectBeamConstraints();
+                d = obj. projectBeamConstraints(withOffset);
                 disp(['current distance: ' num2str(d)]);
             end
         end
@@ -471,6 +501,178 @@ classdef BeamMesh < handle
                 end
             end
             A_length = sparse(A_i(:), A_j, A_val(:), 3*n, 2*n);
+        end
+        
+        function computeRadii(obj)
+            %   iterate over ALL vertices and for each one, compute for ALL
+            %   3 edges their required vectors ONLY for vertex i. build a
+            %   matrix and solve to get r_ij and d_ijk for all vertices.
+            [n,~] = size(obj.VD_vertices);
+            obj.radii = zeros(n,1);
+            
+            for i=1:n
+                %   get neighbors to v_i from lower triangle of adj. mat.
+                neighbors = find(obj.VD_adjacencyMatrix(i,:));
+                e_ij_tag = zeros(3,3);
+                e_ij_hat = zeros(3,3);
+                e_ij_ortho_hat = zeros(3,3);
+                b_ijk_hat = zeros(3,3);
+                for j_idx = 1:length(neighbors)
+                    j = neighbors(j_idx);
+                    [n_i, ~] = obj.getBeamNormals(i, j);
+                    [~, ~, e_ij] = obj.getMidVertices(i, j);
+                    c = (n_i' * e_ij)./(e_ij' * e_ij);
+                    h_ij = 2.*(n_i - c.*e_ij);
+                    %e_ij_tag(:,j_idx) = n_i - h_ij;
+                    %e_ij_hat(:,j_idx) = e_ij_tag(:,j_idx) ./ norm(e_ij_tag(:,j_idx));
+                    %e_ij_ortho = cross(n_i,e_ij_hat(:,j_idx));
+                    %e_ij_ortho_hat(:,j_idx) = e_ij_ortho ./ norm(e_ij_ortho);
+                    %my try to fix:
+                    e_ij_ortho = cross(n_i,e_ij);
+                    e_ij_ortho_hat(:,j_idx) = e_ij_ortho ./ norm(e_ij_ortho);
+                    e_ij_tag(:,j_idx) = cross(e_ij_ortho_hat(:,j_idx), n_i);
+                    e_ij_hat(:,j_idx) = e_ij_tag(:,j_idx) ./ norm(e_ij_tag(:,j_idx));
+                    
+                end
+                for k=1:3
+                    %   compute b_ijk_hat:
+                    next = mod(k,3) + 1;
+                    b_ijk = e_ij_hat(:,k) + e_ij_hat(:,next);
+                    b_ijk_hat(:,k) = b_ijk ./ norm(b_ijk);
+                    
+                    %   compute radius = r_ijk
+                    a1 = norm(e_ij_ortho_hat(:,next) + e_ij_ortho_hat(:,k));
+                    a2 = norm(e_ij_hat(:,k) - e_ij_hat(:,next));
+                    r = obj.thickness .* a1 ./ a2;
+                    
+                    %   using LS:
+                    A = [e_ij_hat(:,k), -b_ijk_hat(:,k); e_ij_hat(:,next), -b_ijk_hat(:,k)];
+                    b = [(-obj.thickness).*e_ij_ortho_hat(:,k); (obj.thickness).*e_ij_ortho_hat(:,next)];
+                    sol = A\b;
+                    r2 = abs(sol(1));
+                    if (r2 > obj.radii(i))
+                        obj.radii(i) = r2;
+                    end
+                end
+                
+            end
+        end
+        
+        function computeThickBeamMesh(obj)
+            %   calculate for each vertex its new position after knowing
+            %   the radii.
+            %obj.computeRadii();
+            
+            n = size(obj.VD_vertices,1);
+            
+            figure;
+            hold on;
+            for i=1:n
+                %   for current vertex use the information in radii array
+                %   to compute new locations:
+                
+                %   get neighbors to v_i from lower triangle of adj. mat.
+                neighbors = find(obj.VD_adjacencyMatrix(i,1:i));
+                
+                for j_idx = 1:length(neighbors)
+                    j = neighbors(j_idx);
+                    [n_i, n_j] = obj.getBeamNormals(i, j);
+                    [~, ~, e_ij] = obj.getMidVertices(i, j);
+                    c = (n_i' * e_ij)./(e_ij' * e_ij);
+                    %h_ij = 2*(n_i - c.*e_ij);
+                    %e_ij_tag = n_i - h_ij;
+                    %e_ij_hat = e_ij_tag ./ norm(e_ij_tag);
+                    e_ij_ortho = cross(n_i,e_ij);
+                    e_ij_ortho_hat = e_ij_ortho ./ norm(e_ij_ortho);
+                    e_ij_tag = cross(e_ij_ortho_hat, n_i);
+                    e_ij_hat = e_ij_tag ./ norm(e_ij_tag);
+                    %   shift vertices:
+                    new_vi_mi = obj.vertices_minus(i,:) + obj.radii(i)*e_ij_hat';
+                    new_vi_pl = obj.vertices_plus(i,:) + obj.radii(i)*e_ij_hat';
+                    
+                    %now for other side of beam:
+                    [~, ~, e_ji] = obj.getMidVertices(j, i);
+                    %c = (n_j' * e_ji)./(e_ji' * e_ji);
+                    %h_ji = 2*(n_j - c.*e_ji);
+                    %e_ji_tag = n_i - h_ji;
+                    %e_ji_hat = e_ji_tag ./ norm(e_ji_tag);
+                    e_ji_ortho = cross(n_j,e_ji);
+                    e_ji_ortho_hat = e_ji_ortho ./ norm(e_ji_ortho);
+                    e_ji_tag = cross(e_ji_ortho_hat, n_j);
+                    e_ji_hat = e_ji_tag ./ norm(e_ji_tag);
+                    
+                    new_vj_mi = obj.vertices_minus(j,:) + obj.radii(j)*e_ji_hat';
+                    new_vj_pl = obj.vertices_plus(j,:) + obj.radii(j)*e_ji_hat';
+                    
+                    beamNormal = cross(n_i, e_ij);
+                    beamNormal = beamNormal ./ norm(beamNormal);
+                    
+                    obj.plotBox(new_vi_pl', new_vi_mi', new_vj_pl', new_vj_mi', beamNormal);
+                end
+            end
+            obj.plotDisks();
+            axis equal;
+        end
+        
+        function plotBox(obj, vi_pl, vi_mi, vj_pl, vj_mi, beamNormal)
+            A = [vi_pl vi_mi vj_mi vj_pl];
+            A_left = A + repmat(obj.thickness.*beamNormal,1,4);
+            A_right = A - repmat(obj.thickness.*beamNormal,1,4);
+            %   plot sides:
+            fill3(A_left(1,:), A_left(2,:), A_left(3,:), 'g');
+            fill3(A_right(1,:), A_right(2,:), A_right(3,:), 'g');
+            %plot top and bottom:
+            top = [A_left(:,1) A_left(:,4) A_right(:,4) A_right(:,1)];
+            bottom = [A_left(:,2) A_left(:,3) A_right(:,3) A_right(:,2)];
+            fill3(top(1,:), top(2,:), top(3,:), 'g');
+            fill3(bottom(1,:), bottom(2,:), bottom(3,:), 'g');
+        end
+        
+        function plotDisks(obj)
+            [n,~] = size(obj.VD_vertices);
+            for i=1:n
+                neighbors = find(obj.VD_adjacencyMatrix(i,:));
+                %[v_i,~,~] = obj.getMidVertices(i, neighbors(1));
+                %center = v_i';
+                [n_i,~] = obj.getBeamNormals(i, neighbors(1));
+                normal = n_i';
+                %obj.fill3DCircle(center, normal, obj.radii(i));
+                bottom = obj.fill3DCircle(obj.vertices_minus(i,:), normal, obj.radii(i));
+                top = obj.fill3DCircle(obj.vertices_plus(i,:), normal, obj.radii(i));
+                
+                obj.plotCylinderBetweenCircles(top, bottom);
+            end
+        end
+        
+        function circle3d = fill3DCircle(obj, origin, planeNormal, radius)
+            circle = 0:0.4:2*pi;
+            plane = null(planeNormal);
+            circle3d = repmat(origin', 1, length(circle)) + ...
+                radius.*(plane(:, 2).*sin(circle) + plane(:, 1).*cos(circle));
+            fill3(circle3d(1, :), circle3d(2, :), circle3d(3, :), 'g');
+        end
+        
+        function plotCylinder(obj, origin, planeNormal, height, radius)
+            circle = 0:0.4:2*pi;
+            plane = null(planeNormal);
+            circle3d_bottom = repmat(origin', 1, length(circle)) + ...
+                radius.*(plane(:, 2).*sin(circle) + plane(:, 1).*cos(circle));
+            circle3d_top = circle3d_bottom + repmat(height.*planeNormal', 1, size(circle3d_bottom,2)); 
+            %fill3(circle3d_bottom(1, :), circle3d_bottom(2, :), circle3d_bottom(3, :), 'b');
+            %fill3(circle3d_top(1, :), circle3d_top(2, :), circle3d_top(3, :), 'b');
+            for i=1:(size(circle3d_top,2)-1)
+                A = [circle3d_bottom(:, i) circle3d_top(:,i) ...
+                    circle3d_top(:,i+1) circle3d_bottom(:, i+1)];
+                fill3(A(1,:),A(2,:),A(3,:),'g');
+            end
+        end
+        
+        function plotCylinderBetweenCircles(obj, circle3d_top, circle3d_bottom)
+            for i=1:(size(circle3d_top,2)-1)
+                A = [circle3d_bottom(:, i) circle3d_top(:,i) ...
+                    circle3d_top(:,i+1) circle3d_bottom(:, i+1)];
+                fill3(A(1,:),A(2,:),A(3,:),'g');
+            end
         end
         
         function showBeamMesh(obj)
