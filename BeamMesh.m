@@ -41,23 +41,23 @@ classdef BeamMesh < handle
             obj.numberOfSites = k;
             
             if (nargin <= 2)
-                obj.beamHeight = 3;
-                obj.heightTolerance = 0.2;
+                obj.beamHeight = 6;
+                obj.heightTolerance = 0.6;
             elseif (nargin == 3)
                 obj.beamHeight = beamHeight;
-                obj.heightTolerance = 0.2;
+                obj.heightTolerance = 0.6;
             else
                 obj.beamHeight = beamHeight;
                 obj.heightTolerance = heightTolerance;
             end
             if (nargin < 5)
-                obj.minEdgeLengthThreshold = 2;
+                obj.minEdgeLengthThreshold = 9;
             else
                 obj.minEdgeLengthThreshold = edgeLenThreshold;
             end
             
             if (nargin < 6)
-                obj.thickness = 0.5;
+                obj.thickness = 0.8;
             else
                 obj.thickness = thickness;
             end
@@ -136,12 +136,14 @@ classdef BeamMesh < handle
             obj.sites = cvtObj.sites;
             
             obj.VD_adjacencyMatrix = cvtObj.voronoiAdjMatrix;
-            obj.VD_vertices = cvtObj.voronoiVertices;
+            obj.VD_vertices = Transformations3D.translate3DShape(cvtObj.voronoiVertices',[0;0;0]);
+            obj.VD_vertices = obj.VD_vertices';
+            %obj.VD_vertices = cvtObj.voronoiVertices;
             obj.verticesNormals = cvtObj.voronoiVertexNormals;
             
             %normailze the mesh coordinates so they are around 100:
             targetMean = 100;
-            meandist = norm(mean(obj.VD_vertices));
+            meandist = norm(mean(abs(obj.VD_vertices)));
             c = targetMean/meandist;
             obj.VD_vertices = c .* obj.VD_vertices;
             
@@ -563,6 +565,9 @@ classdef BeamMesh < handle
             %obj.computeRadii();
             
             n = size(obj.VD_vertices,1);
+            m = (3/2)*n;
+            obj.thickBeams = cell(m,1);
+            current_beam = 1;
             
             figure;
             hold on;
@@ -603,10 +608,13 @@ classdef BeamMesh < handle
                     new_vj_mi = obj.vertices_minus(j,:) + obj.radii(j)*e_ji_hat';
                     new_vj_pl = obj.vertices_plus(j,:) + obj.radii(j)*e_ji_hat';
                     
-                    beamNormal = cross(n_i, e_ij);
+                    beamNormal = cross(n_i+n_j, e_ij);
                     beamNormal = beamNormal ./ norm(beamNormal);
                     
                     obj.plotBox(new_vi_pl', new_vi_mi', new_vj_pl', new_vj_mi', beamNormal);
+                    
+                    obj.thickBeams{current_beam} = [new_vi_pl' new_vj_pl' new_vj_mi' new_vi_mi' beamNormal];
+                    current_beam = current_beam + 1;
                 end
             end
             obj.plotDisks();
@@ -696,6 +704,54 @@ classdef BeamMesh < handle
                     hold on;
                 end
             end
+            axis equal;
+        end
+        
+        function alignBeamsOnPlane(obj)
+            %   This function transform all beams in thickBeams to the x-y
+            %   plane in order to print them later on.
+            figure; hold on;
+            origin = [0;0;0];
+            distance = 0;
+            for beam_idx=1:size(obj.thickBeams)
+                beam = obj.thickBeams{beam_idx};
+                %   align with Z axis:
+                beam(:,1:4) = Transformations3D.translate3DShape(beam(:,1:4), origin);
+                beam = Transformations3D.alignWithZAxis(beam,beam(:,5));
+                %obj.thickBeams{beam_idx} = beam;
+                %   align with X axis also:
+                line = beam(:,2) - beam(:,1);
+                line = line ./ norm(line);
+                if (line (1) == 0)
+                    theta = pi/2;
+                else
+                    theta = -atan(line(2)/line(1));
+                end
+                beam = Transformations3D.rotateAroundZAxis(beam,theta);
+                %   translate to empty slot:
+                beam(:,1:4) = Transformations3D.translate3DShape(beam(:,1:4), [0; distance; 0]);
+                distance = distance + 2*max([norm(beam(:,3)-beam(:,2)) norm(beam(:,4)-beam(:,1))])+1;
+                
+                if(beam_idx <= 200)
+                    fill3(beam(1,1:4), beam(2,1:4), beam(3,1:4), 'g');
+                    %center = mean(beam,2);
+                    %normal = beam(:,5);
+                    %quiver3(center(1),center(2),center(3), normal(1),normal(2),normal(3));
+                end
+            end
+            axis equal;
+        end
+        
+        function alignDisksOnPlane(obj)
+            figure; hold on;
+            distance = 0;
+            
+            for i=1:size(obj.radii)
+                r = obj.radii(i);
+                fill3DCircle(obj, [0 (distance+r) 0], [0 0 1], r);
+                distance = distance + r*2 + 1;
+            end
+            
             axis equal;
         end
     end
