@@ -20,8 +20,7 @@ classdef BeamMesh < handle
         minEdgeLengthThreshold
         thickness
         radii
-        thick_vertices_plus
-        thick_vertices_minus
+        thickBeams
     end
     
     methods
@@ -43,10 +42,10 @@ classdef BeamMesh < handle
             
             if (nargin <= 2)
                 obj.beamHeight = 3;
-                obj.heightTolerance = 0.02;
+                obj.heightTolerance = 0.2;
             elseif (nargin == 3)
                 obj.beamHeight = beamHeight;
-                obj.heightTolerance = 0.02;
+                obj.heightTolerance = 0.2;
             else
                 obj.beamHeight = beamHeight;
                 obj.heightTolerance = heightTolerance;
@@ -58,7 +57,7 @@ classdef BeamMesh < handle
             end
             
             if (nargin < 6)
-                obj.thickness = 1;
+                obj.thickness = 0.5;
             else
                 obj.thickness = thickness;
             end
@@ -680,7 +679,7 @@ classdef BeamMesh < handle
             [V_size,~] = size(obj.VD_adjacencyMatrix);
             
             figure;
-            axis equal;
+            
             for i=1:V_size
                 vertices = find(obj.VD_adjacencyMatrix(i,1:i));
                 if(isempty(vertices))
@@ -697,6 +696,7 @@ classdef BeamMesh < handle
                     hold on;
                 end
             end
+            axis equal;
         end
     end
 end

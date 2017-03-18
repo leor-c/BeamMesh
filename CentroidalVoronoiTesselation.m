@@ -5,6 +5,7 @@ classdef CentroidalVoronoiTesselation < handle
     properties
         mesh
         sites
+        initialSites
         numberOfSites
         cells
         metrics
@@ -47,6 +48,7 @@ classdef CentroidalVoronoiTesselation < handle
             %       size k X 3 X 3 when k is number of initial sites.
             obj.mesh = mesh;
             obj.sites = initial_x;
+            obj.initialSites = initial_x;
             obj.numberOfSites = length(obj.sites);
             %   the 'cells' will be an array of size |V| such that every
             %   entry will represent the index of the voronoi cell of the
@@ -550,6 +552,14 @@ classdef CentroidalVoronoiTesselation < handle
             %N = obj.getFacesNormals();
             %quiver3(obj.sites(:,1), obj.sites(:,2), obj.sites(:,3) ...
             %    ,N(1,:)', N(2,:)', N(3,:)','-k');
+        end
+        
+        function showInitialSites(obj)
+            obj.mesh.showMesh(ones(obj.mesh.dimensions(2),1));
+            alpha(0.85);
+            hold on;
+            scatter3(obj.initialSites(:,1), obj.initialSites(:,2), ...
+                obj.initialSites(:,3),100,'filled','yellow');
         end
         
         function showPolygon(obj, mixed)
